@@ -1,0 +1,582 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: craftista
+---
+# Postgres credentials stored as a Kubernetes Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: craftista
+type: Opaque
+stringData:
+  POSTGRES_DB: craftista_db
+  POSTGRES_USER: craftista_user
+  POSTGRES_PASSWORD: craftista_pass
+---
+# PersistentVolume (hostPath) for Postgres data
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /mnt/data/postgres
+---
+# PersistentVolumeClaim for Postgres
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: craftista
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+# PostgreSQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: craftista
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16.2-alpine3.19
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        # pg_isready با نام کاربری ثابت (probeها env variable expansion را پشتیبانی نمی‌کنند)
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "craftista_user"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 6
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "craftista_user"]
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      volumes:
+      - name: pg-data
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: craftista
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP
+---
+# Catalogue Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalogue
+  namespace: craftista
+  labels:
+    app: catalogue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: catalogue
+  template:
+    metadata:
+      labels:
+        app: catalogue
+    spec:
+      containers:
+      - name: catalogue
+        image: 192.168.2.4/craftista/craftista-catalogue:dev
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: postgres-service
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /api/products
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/products
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      imagePullSecrets:
+      - name: harbor-secret
+---
+# Catalogue Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogue-service
+  namespace: craftista
+spec:
+  selector:
+    app: catalogue
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+  type: ClusterIP
+---
+# Recco Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recco
+  namespace: craftista
+  labels:
+    app: recco
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: recco
+  template:
+    metadata:
+      labels:
+        app: recco
+    spec:
+      containers:
+      - name: recco
+        image: 192.168.2.4/craftista/craftista-recco:dev
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_HOST
+          value: postgres-service
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /api/recommendation-status
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/recommendation-status
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      imagePullSecrets:
+      - name: harbor-secret
+---
+# Recco Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: recco-service
+  namespace: craftista
+spec:
+  selector:
+    app: recco
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+# Voting Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voting
+  namespace: craftista
+  labels:
+    app: voting
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: voting
+  template:
+    metadata:
+      labels:
+        app: voting
+    spec:
+      containers:
+      - name: voting
+        image: 192.168.2.4/craftista/craftista-voting:dev
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_HOST
+          value: postgres-service
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
+        readinessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      imagePullSecrets:
+      - name: harbor-secret
+---
+# Voting Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: voting-service
+  namespace: craftista
+spec:
+  selector:
+    app: voting
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: craftista
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: 192.168.2.4/craftista/craftista-frontend:dev
+        ports:
+        - containerPort: 3000
+        env:
+        - name: CATALOGUE_URL
+          value: "/api/catalogue"
+        - name: VOTING_URL
+          value: "/api/voting"
+        - name: RECCO_URL
+          value: "/api/recco"
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      imagePullSecrets:
+      - name: harbor-secret
+---
+# NGINX Gateway ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-nginx-conf
+  namespace: craftista
+data:
+  nginx.conf: |
+    events {}
+    http {
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+
+      server {
+        listen 8080;
+
+        # Frontend UI
+        location / {
+          proxy_pass http://frontend-service:3000;
+        }
+
+        # Catalogue API
+        location /api/catalogue/ {
+          proxy_pass http://catalogue-service:5000/;
+        }
+        location = /api/catalogue {
+          proxy_pass http://catalogue-service:5000;
+        }
+
+        # Recco API
+        location /api/recco/ {
+          proxy_pass http://recco-service:8080/;
+        }
+        location = /api/recco {
+          proxy_pass http://recco-service:8080;
+        }
+
+        # Voting API
+        location /api/voting/ {
+          proxy_pass http://voting-service:8080/;
+        }
+        location = /api/voting {
+          proxy_pass http://voting-service:8080;
+        }
+      }
+    }
+---
+# NGINX Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: craftista
+  labels:
+    app: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: nginx-conf
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "150m"
+            memory: "128Mi"
+      volumes:
+      - name: nginx-conf
+        configMap:
+          name: gateway-nginx-conf
+---
+# NGINX Gateway Service (NodePort 32000) - Main Entry Point
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-service
+  namespace: craftista
+spec:
+  selector:
+    app: gateway
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+      nodePort: 32000
+  type: NodePort
+---
+# Frontend Service (Internal)
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: craftista
+spec:
+  selector:
+    app: frontend
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP
+---
+# Service Aliases for inter-service communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogue
+  namespace: craftista
+spec:
+  selector:
+    app: catalogue
+  ports:
+    - port: 5000
+      targetPort: 5000
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voting
+  namespace: craftista
+spec:
+  selector:
+    app: voting
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recco
+  namespace: craftista
+spec:
+  selector:
+    app: recco
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
