@@ -1,6 +1,4 @@
-Perfect! Here’s the updated README with your name and contact included in the Author section:
 
-````markdown
 # Craftista on Kubernetes – Deployment Guide
 
 ## Overview
