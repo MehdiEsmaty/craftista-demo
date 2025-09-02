@@ -140,12 +140,4 @@ kubectl delete namespace craftista --ignore-not-found
 **Mehdi Esmati**
 DevOps / Kubernetes Deployment
 Contact: +98 915 387 0132
-
-```
-
----
-
-If you want, I can **also make a version that visually shows Harbor → Kubernetes → Gateway → Frontend/Backend flow** to make the README look more professional and production-ready.  
-
-Do you want me to do that?
-```
+Email: mehdi.esmaty@gmail.com
